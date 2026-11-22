@@ -390,13 +390,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 最近出现过流量的进程名队列（先进先出，最多 5 个）：
+    /// 活跃进程不足 5 行时用它补齐，保证排行始终满 5 行
+    private var recentNames: [String] = []
+
     private func updateTopMenu(_ tops: [ProcTraffic]) {
+        // 新名字入队（已存在则原位不动），超过 5 个时队首先出（FIFO）
+        for t in tops where !recentNames.contains(t.name) {
+            recentNames.append(t.name)
+        }
+        while recentNames.count > 5 { recentNames.removeFirst() }
+
+        // 活跃进程按速率先排；不足的行用 FIFO 中近期活跃的进程补齐（无流量显示 0）
+        let active = Set(tops.map(\.name))
+        var display = tops
+        for name in recentNames.reversed() where display.count < 5 {
+            if !active.contains(name) {
+                display.append(ProcTraffic(name: name, downRate: 0, upRate: 0))
+            }
+        }
+
         for (i, item) in topItems.enumerated() {
-            guard i < tops.count else {
+            guard i < display.count else {
                 item.isHidden = true
                 continue
             }
-            let t = tops[i]
+            let t = display[i]
             (item.view as? TrafficRowView)?.configure(rank: i + 1, name: t.name,
                                                       down: t.downRate, up: t.upRate)
             item.isHidden = false
@@ -415,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // Top 进程网速排行：先占位隐藏，有数据后逐行显示（相邻分隔符系统会自动合并）
+        // Top 进程网速排行：先占位隐藏，采样到数据后始终补满 5 行（不足用 FIFO 近期进程）
         for _ in 0..<5 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             item.view = TrafficRowView(card: false)
