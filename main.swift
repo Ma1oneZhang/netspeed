@@ -90,62 +90,101 @@ func shortRate(_ bps: Double) -> String {
     return "\(s.num.trimmingCharacters(in: .whitespaces))\(s.unit)/s"
 }
 
-// MARK: - 菜单富文本（等宽对齐 + 彩色箭头）
+// MARK: - 菜单行视图（圆角卡片 + 分档字体，文字统一黑色）
 
-private let menuFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-private let menuNumFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-private let menuDimColor = NSColor.secondaryLabelColor
-private let menuDownColor = NSColor.systemGreen
-private let menuUpColor = NSColor.systemOrange
-/// nettop 进程名最长截断到 15 字符，列宽留 1 格余量
-private let procNameWidth = 16
-
-/// 显示宽度：全角字符按 2 格计，其余 1 格（中英混排对齐用）
-private func displayWidth(_ s: String) -> Int {
-    s.unicodeScalars.reduce(0) { $0 + ($1.value >= 0x2E80 ? 2 : 1) }
-}
-
-/// 进程名定宽：超宽截断补省略号，不足右侧补空格，保证速率列上下对齐
-private func fitName(_ name: String) -> String {
-    let w = displayWidth(name)
-    if w <= procNameWidth {
-        return name + String(repeating: " ", count: procNameWidth - w)
-    }
-    var out = ""
-    var used = 0
-    for ch in name {
-        let cw = displayWidth(String(ch))
-        if used + cw > procNameWidth - 1 { break }
-        out.append(ch)
-        used += cw
-    }
-    return out + "…" + String(repeating: " ", count: max(0, procNameWidth - used - 1))
-}
-
-private func menuSegment(_ text: String, _ font: NSFont, _ color: NSColor) -> NSAttributedString {
-    NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-}
-
-/// 速率单元：彩色箭头 + 等宽数值（右对齐固定 8 格），如 "↓  7.7K/s"
-private func rateCell(arrow: String, color: NSColor, bps: Double, bold: Bool) -> NSMutableAttributedString {
+/// 速率单元：箭头 + 等宽数值，如 "↓  7.7K/s"（labelColor 即浅模式纯黑/深模式纯白）
+private func rateCell(arrow: String, bps: Double,
+                      arrowFont: NSFont, numFont: NSFont) -> NSAttributedString {
     let s = splitRate(bps)
     let str = NSMutableAttributedString()
-    str.append(menuSegment(arrow, menuFont, color))
-    str.append(menuSegment("\(s.num)\(s.unit)/s", bold ? menuNumFont : menuFont, .labelColor))
+    str.append(NSAttributedString(string: arrow + " ", attributes: [
+        .font: arrowFont, .foregroundColor: NSColor.labelColor]))
+    str.append(NSAttributedString(string: "\(s.num)\(s.unit)/s", attributes: [
+        .font: numFont, .foregroundColor: NSColor.labelColor]))
     return str
 }
 
-/// 排行/总计通用的一行：`序号 进程名  ↓下载  ↑上传`，总计行 rank 传 nil
-private func trafficRow(rank: Int?, name: String, down: Double, up: Double, bold: Bool = false) -> NSAttributedString {
-    let str = NSMutableAttributedString()
-    str.append(menuSegment(rank.map { String(format: "%d. ", $0) } ?? "   ",
-                           menuFont, menuDimColor))
-    str.append(menuSegment(fitName(name), menuFont, .labelColor))
-    str.append(menuSegment("  ", menuFont, .labelColor))
-    str.append(rateCell(arrow: "↓", color: menuDownColor, bps: down, bold: bold))
-    str.append(menuSegment("  ", menuFont, .labelColor))
-    str.append(rateCell(arrow: "↑", color: menuUpColor, bps: up, bold: bold))
-    return str
+/// 总计/排行通用的一行菜单视图：`序号 进程名  ↓下载  ↑上传`
+/// 总计行（card）带圆角卡片边框、主题色点缀条和稍大加粗的数字
+final class TrafficRowView: NSView {
+    static let contentWidth: CGFloat = 336
+    private static let rowHeight: CGFloat = 26
+    private static let cardHeight: CGFloat = 34
+
+    private let card: Bool
+    private let nameFont: NSFont
+    private let numFont: NSFont
+    private let arrowFont: NSFont
+
+    private let rankLabel = NSTextField(labelWithString: "")
+    private let nameLabel: NSTextField = {
+        let f = NSTextField(labelWithString: "")
+        f.lineBreakMode = .byTruncatingTail
+        f.maximumNumberOfLines = 1
+        return f
+    }()
+    private let downField = NSTextField(labelWithString: "")
+    private let upField = NSTextField(labelWithString: "")
+
+    init(card: Bool) {
+        self.card = card
+        // 三档字体：进程名比例字体（中文友好）、数字等宽（对齐）、总计行加大加粗
+        nameFont = .systemFont(ofSize: 13, weight: card ? .medium : .regular)
+        numFont = .monospacedSystemFont(ofSize: card ? 14 : 12.5, weight: card ? .medium : .regular)
+        arrowFont = .systemFont(ofSize: card ? 13 : 12, weight: .medium)
+        super.init(frame: NSRect(x: 0, y: 0,
+                                 width: Self.contentWidth,
+                                 height: card ? Self.cardHeight : Self.rowHeight))
+
+        let trail: CGFloat = 14
+        let lead: CGFloat = card ? 26 : 14   // 卡片行给左侧主题色点缀条让位
+        let rankW: CGFloat = 22
+        let cellW: CGFloat = 86
+        let gap: CGFloat = 8
+        let nameW = Self.contentWidth - lead - trail - rankW - gap * 2 - cellW * 2
+
+        rankLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        rankLabel.textColor = .labelColor
+        nameLabel.font = nameFont
+        downField.alignment = .right
+        upField.alignment = .right
+
+        let labelH: CGFloat = 17
+        let midY = (frame.height - labelH) / 2 - 1
+        rankLabel.frame = NSRect(x: lead, y: midY, width: rankW, height: 15)
+        nameLabel.frame = NSRect(x: lead + rankW, y: midY, width: nameW, height: labelH)
+        upField.frame = NSRect(x: Self.contentWidth - trail - cellW, y: midY, width: cellW, height: labelH)
+        downField.frame = NSRect(x: upField.frame.minX - gap - cellW, y: midY, width: cellW, height: labelH)
+        for f in [rankLabel, nameLabel, downField, upField] { addSubview(f) }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(rank: Int?, name: String, down: Double, up: Double) {
+        rankLabel.stringValue = rank.map { "\($0)." } ?? ""
+        nameLabel.stringValue = name
+        downField.attributedStringValue = rateCell(arrow: "↓", bps: down,
+                                                   arrowFont: arrowFont, numFont: numFont)
+        upField.attributedStringValue = rateCell(arrow: "↑", bps: up,
+                                                 arrowFont: arrowFont, numFont: numFont)
+    }
+
+    /// 总计行的圆角卡片：极淡的填充与描边（深浅色自动适配）+ 主题色点缀条
+    override func draw(_ dirtyRect: NSRect) {
+        guard card else { return }
+        let rect = bounds.insetBy(dx: 4, dy: 3)
+        let cardPath = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        cardPath.fill()
+        NSColor.labelColor.withAlphaComponent(0.12).setStroke()
+        cardPath.lineWidth = 1
+        cardPath.stroke()
+        let accent = NSBezierPath(roundedRect: NSRect(x: rect.minX + 8, y: rect.minY + 8,
+                                                      width: 3.5, height: rect.height - 16),
+                                  xRadius: 1.75, yRadius: 1.75)
+        NSColor.controlAccentColor.setFill()
+        accent.fill()
+    }
 }
 
 // MARK: - 每进程流量采样（fork 系统 nettop 解析 CSV，无需 root）
@@ -337,9 +376,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastShownText = text
             statusItem.button?.image = renderChipImage(down: down, up: up)
         }
-        // 总计行与下方 Top 排行共用同一套定宽列布局，数字加粗略作突出
-        detailItem?.attributedTitle = trafficRow(rank: nil, name: "总计",
-                                                 down: down, up: up, bold: true)
+        // 总计行：圆角卡片视图，与下方 Top 排行同一套列布局
+        (detailItem?.view as? TrafficRowView)?.configure(rank: nil, name: "总计",
+                                                         down: down, up: up)
         loginItem?.state = LoginItem.isEnabled ? .on : .off
 
         // 每 2 秒在后台采样一次进程流量（nettop 单次约 50ms，开销可忽略）
@@ -358,8 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 continue
             }
             let t = tops[i]
-            item.attributedTitle = trafficRow(rank: i + 1, name: t.name,
-                                              down: t.downRate, up: t.upRate)
+            (item.view as? TrafficRowView)?.configure(rank: i + 1, name: t.name,
+                                                      down: t.downRate, up: t.upRate)
             item.isHidden = false
         }
     }
@@ -367,7 +406,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func buildMenu() {
         let menu = NSMenu()
 
+        // 总计行：圆角卡片视图（display-only）
         let detail = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        detail.view = TrafficRowView(card: true)
         detail.isEnabled = false
         menu.addItem(detail)
         detailItem = detail
@@ -377,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Top 进程网速排行：先占位隐藏，有数据后逐行显示（相邻分隔符系统会自动合并）
         for _ in 0..<5 {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.view = TrafficRowView(card: false)
             item.isEnabled = false
             item.isHidden = true
             menu.addItem(item)
@@ -443,6 +485,56 @@ if CommandLine.arguments.contains("--preview") {
             let path = "/tmp/netspeed-\(name).png"
             try? png.write(to: URL(fileURLWithPath: path))
             print("已保存 \(path)  尺寸 \(img.size.width)×\(img.size.height)")
+        }
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--menushot") {
+    // 预览模式：离屏渲染菜单行到离屏窗口，导出 light/dark 两张 PNG 核对字体与边框
+    let samples: [(rank: Int?, name: String, down: Double, up: Double)] = [
+        (nil, "总计", 11_534_336, 1_004_032),
+        (1, "io.tailscale.ip", 8_092, 3_358),
+        (2, "WeChat Helper (GPU)", 4_608, 624),
+        (3, "微信输入法", 1_946, 238),
+        (4, "mosh-client", 524, 96),
+        (5, "com.apple.WebKit.Networking", 88, 0),
+    ]
+    var views: [TrafficRowView] = []
+    for s in samples {
+        let v = TrafficRowView(card: s.rank == nil)
+        v.configure(rank: s.rank, name: s.name, down: s.down, up: s.up)
+        views.append(v)
+    }
+    let totalH = views.reduce(14 as CGFloat) { $0 + $1.frame.height + 2 }
+    let container = NSView(frame: NSRect(x: 0, y: 0,
+                                         width: TrafficRowView.contentWidth + 16,
+                                         height: totalH))
+    var y = totalH - 8
+    for v in views {
+        y -= v.frame.height
+        v.setFrameOrigin(NSPoint(x: 8, y: y))
+        container.addSubview(v)
+        y -= 2
+    }
+
+    let shotApp = NSApplication.shared
+    shotApp.setActivationPolicy(.accessory)
+    let window = NSWindow(contentRect: NSRect(origin: .zero, size: container.frame.size),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+    window.contentView = container
+    window.setFrameOrigin(NSPoint(x: -50_000, y: 0))
+    window.orderBack(nil)
+
+    for (tag, appearance) in [("light", NSAppearance(named: .aqua)),
+                              ("dark", NSAppearance(named: .darkAqua))] {
+        window.appearance = appearance
+        guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else { continue }
+        container.cacheDisplay(in: container.bounds, to: rep)
+        if let png = rep.representation(using: .png, properties: [:]) {
+            let path = "/tmp/netspeed-menu-\(tag).png"
+            try? png.write(to: URL(fileURLWithPath: path))
+            print("已保存 \(path)  尺寸 \(rep.pixelsWide)×\(rep.pixelsHigh)")
         }
     }
     exit(0)
