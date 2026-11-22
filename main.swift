@@ -90,6 +90,64 @@ func shortRate(_ bps: Double) -> String {
     return "\(s.num.trimmingCharacters(in: .whitespaces))\(s.unit)/s"
 }
 
+// MARK: - 菜单富文本（等宽对齐 + 彩色箭头）
+
+private let menuFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+private let menuNumFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+private let menuDimColor = NSColor.secondaryLabelColor
+private let menuDownColor = NSColor.systemGreen
+private let menuUpColor = NSColor.systemOrange
+/// nettop 进程名最长截断到 15 字符，列宽留 1 格余量
+private let procNameWidth = 16
+
+/// 显示宽度：全角字符按 2 格计，其余 1 格（中英混排对齐用）
+private func displayWidth(_ s: String) -> Int {
+    s.unicodeScalars.reduce(0) { $0 + ($1.value >= 0x2E80 ? 2 : 1) }
+}
+
+/// 进程名定宽：超宽截断补省略号，不足右侧补空格，保证速率列上下对齐
+private func fitName(_ name: String) -> String {
+    let w = displayWidth(name)
+    if w <= procNameWidth {
+        return name + String(repeating: " ", count: procNameWidth - w)
+    }
+    var out = ""
+    var used = 0
+    for ch in name {
+        let cw = displayWidth(String(ch))
+        if used + cw > procNameWidth - 1 { break }
+        out.append(ch)
+        used += cw
+    }
+    return out + "…" + String(repeating: " ", count: max(0, procNameWidth - used - 1))
+}
+
+private func menuSegment(_ text: String, _ font: NSFont, _ color: NSColor) -> NSAttributedString {
+    NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+}
+
+/// 速率单元：彩色箭头 + 等宽数值（右对齐固定 8 格），如 "↓  7.7K/s"
+private func rateCell(arrow: String, color: NSColor, bps: Double, bold: Bool) -> NSMutableAttributedString {
+    let s = splitRate(bps)
+    let str = NSMutableAttributedString()
+    str.append(menuSegment(arrow, menuFont, color))
+    str.append(menuSegment("\(s.num)\(s.unit)/s", bold ? menuNumFont : menuFont, .labelColor))
+    return str
+}
+
+/// 排行/总计通用的一行：`序号 进程名  ↓下载  ↑上传`，总计行 rank 传 nil
+private func trafficRow(rank: Int?, name: String, down: Double, up: Double, bold: Bool = false) -> NSAttributedString {
+    let str = NSMutableAttributedString()
+    str.append(menuSegment(rank.map { String(format: "%d. ", $0) } ?? "   ",
+                           menuFont, menuDimColor))
+    str.append(menuSegment(fitName(name), menuFont, .labelColor))
+    str.append(menuSegment("  ", menuFont, .labelColor))
+    str.append(rateCell(arrow: "↓", color: menuDownColor, bps: down, bold: bold))
+    str.append(menuSegment("  ", menuFont, .labelColor))
+    str.append(rateCell(arrow: "↑", color: menuUpColor, bps: up, bold: bold))
+    return str
+}
+
 // MARK: - 每进程流量采样（fork 系统 nettop 解析 CSV，无需 root）
 
 /// 一个 App（同名进程合并后）的实时速率快照
@@ -279,10 +337,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastShownText = text
             statusItem.button?.image = renderChipImage(down: down, up: up)
         }
-        // 与状态栏一致的自动换挡单位（固定宽度避免菜单宽度抖动）；
-        // 原来用 MB/s 两位小数，小流量下常年显示 0.00/0.01，看起来像没刷新
-        let d = splitRate(down), u = splitRate(up)
-        detailItem?.title = "下载 \(d.num)\(d.unit)/s    上传 \(u.num)\(u.unit)/s"
+        // 总计行与下方 Top 排行共用同一套定宽列布局，数字加粗略作突出
+        detailItem?.attributedTitle = trafficRow(rank: nil, name: "总计",
+                                                 down: down, up: up, bold: true)
         loginItem?.state = LoginItem.isEnabled ? .on : .off
 
         // 每 2 秒在后台采样一次进程流量（nettop 单次约 50ms，开销可忽略）
@@ -301,9 +358,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 continue
             }
             let t = tops[i]
-            item.title = String(format: "%d. %@  ↓%@  ↑%@",
-                                i + 1, t.name,
-                                shortRate(t.downRate), shortRate(t.upRate))
+            item.attributedTitle = trafficRow(rank: i + 1, name: t.name,
+                                              down: t.downRate, up: t.upRate)
             item.isHidden = false
         }
     }
