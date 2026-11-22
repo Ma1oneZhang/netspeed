@@ -25,6 +25,10 @@ open ~/Applications/NetSpeed.app   # 首次启动后自动加入登录项
 卸载：状态栏菜单退出后删除 `~/Applications/NetSpeed.app`，
 并在 系统设置 → 通用 → 登录项 中移除 NetSpeed。
 
+## 开源许可
+
+[Apache License 2.0](LICENSE)
+
 ## 调试
 
 ```bash
